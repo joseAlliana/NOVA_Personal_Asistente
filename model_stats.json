@@ -1,26 +1,26 @@
 {
   "llama3.2:1b": {
     "success": 1,
-    "fail": 2,
+    "fail": 4,
     "avg_latency": 1.0,
-    "last_fail": 1778158037.0206652
+    "last_fail": 1778159041.2174897
   },
   "nvidia/nemotron-nano-9b-v2:free": {
     "success": 1,
-    "fail": 2,
+    "fail": 4,
     "avg_latency": 1.0,
-    "last_fail": 1778158037.0965037
+    "last_fail": 1778159041.2457728
   },
   "nvidia/nemotron-3-nano-30b-a3b:free": {
     "success": 1,
-    "fail": 2,
+    "fail": 4,
     "avg_latency": 1.0,
-    "last_fail": 1778158037.1150887
+    "last_fail": 1778159041.2709632
   },
   "meta-llama/llama-3.1-8b-instruct:free": {
     "success": 1,
-    "fail": 2,
+    "fail": 4,
     "avg_latency": 1.0,
-    "last_fail": 1778158037.138292
+    "last_fail": 1778159041.3082893
   }
 }
