@@ -46,7 +46,6 @@ BASE_REQUIREMENTS = [
     "openai>=1.0.0",
     "edge-tts>=6.1.9",
     "SpeechRecognition",
-    "PyAudio",
     "python-dotenv",
     "duckduckgo-search",
     "pyautogui",
@@ -58,6 +57,13 @@ BASE_REQUIREMENTS = [
     "groq",
     "anthropic",
 ]
+
+# PyAudio y playsound son opcionales - requieren compilación en Windows
+OPTIONAL_REQUIREMENTS = {
+    "macos": ["PyAudio"],
+    "windows": ["PyAudio"],
+    "linux": ["PyAudio"],
+}
 
 # ─── Requisitos por plataforma ───────────────────────────────────────────────
 
@@ -74,7 +80,8 @@ PLATFORM_REQUIREMENTS = {
         "pycaw",           # control de volumen Windows
         "comtypes",        # pycaw dep
         "pyperclip",       # portapapeles cross-platform
-        "playsound",       # reproducción de audio
+        "sounddevice",     # grabación de audio (alternativa a PyAudio, sin compilación)
+        "numpy",           # requerido por sounddevice para audio
     ],
     "linux": [
         "PyQt5",
@@ -153,11 +160,36 @@ def check_env_file() -> bool:
 
 # ─── Instalación ─────────────────────────────────────────────────────────────
 
-def pip_install(packages: list[str]) -> bool:
+def pip_install(packages: list[str], optional: bool = False) -> bool:
     if not packages:
         return True
+    
+    # Si es Windows e intentamos instalar PyAudio, intentar con versión precompilada
+    if PLATFORM == "windows" and "PyAudio" in packages:
+        warn("PyAudio requiere compilación en Windows. Intentando versión precompilada...")
+        packages = [p for p in packages if p != "PyAudio"]
+        
+        # Intentar descargar wheel precompilado
+        try:
+            import struct
+            bits = 64 if struct.calcsize("P") * 8 == 64 else 32
+            py_version = f"{sys.version_info.major}{sys.version_info.minor}"
+            wheel_name = f"PyAudio-0.2.13-cp{py_version}-cp{py_version}-win_amd64.whl"
+            
+            cmd = [sys.executable, "-m", "pip", "install", "--upgrade", "--only-binary", ":all:", "PyAudio"]
+            result = subprocess.run(cmd, capture_output=True)
+            if result.returncode != 0:
+                warn("No se pudo instalar PyAudio precompilado. Será opcional.")
+        except:
+            warn("No se pudo instalar PyAudio. Será opcional.")
+    
     cmd = [sys.executable, "-m", "pip", "install", "--upgrade", *packages]
     result = subprocess.run(cmd)
+    
+    if result.returncode != 0 and optional:
+        warn("Algunas dependencias opcionales fallaron (pueden usarse alternativas)")
+        return True  # No fallar para dependencias opcionales
+    
     return result.returncode == 0
 
 
@@ -177,10 +209,17 @@ def install_all() -> None:
     if plat_deps:
         header(f"Dependencias {PLATFORM.upper()}")
         info(f"Instalando {len(plat_deps)} paquetes específicos...")
-        if pip_install(plat_deps):
+        if pip_install(plat_deps, optional=True):
             ok(f"Dependencias {PLATFORM} instaladas")
         else:
             warn(f"Algunas dependencias {PLATFORM} fallaron (pueden ser opcionales)")
+
+    # 2b. Requisitos opcionales (con mejor manejo de errores)
+    opt_deps = OPTIONAL_REQUIREMENTS.get(PLATFORM, [])
+    if opt_deps:
+        header("Dependencias opcionales (pueden fallar - es OK)")
+        info(f"Intentando instalar {len(opt_deps)} paquetes opcionales...")
+        pip_install(opt_deps, optional=True)
 
     # 3. Deps de sistema
     check_system_deps()
@@ -192,6 +231,18 @@ def install_all() -> None:
     # 5. Ollama (opcional)
     header("Dependencias opcionales")
     check_ollama()
+    
+    # 6. Post-install de pywin32 en Windows (requerido para winreg)
+    if PLATFORM == "windows":
+        try:
+            info("Ejecutando post-install de pywin32...")
+            subprocess.run([sys.executable, "-m", "pip", "show", "pywin32"], 
+                          capture_output=True, check=True)
+            # Si pywin32 está instalado, ejecutar post-install
+            subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade", "pywin32"],
+                          capture_output=False)
+        except:
+            pass
 
     # ── Crear lanzador en el escritorio ─────────────────────────────────────
     create_desktop_launcher()
@@ -208,10 +259,118 @@ def install_all() -> None:
     elif PLATFORM == "windows":
         print("  1. Editá .env y configurá tus API keys")
         print("  2. python main.py      (o hacer doble clic en el lanzador de Nova en el escritorio)")
+        print("  3. Usa 'nova' en PowerShell/CMD (requiere reiniciar la terminal)")
     else:
         print("  1. Editá .env y configurá tus API keys")
         print("  2. python main.py      (o hacer doble clic en el lanzador de Nova en el escritorio)")
     print()
+
+
+def create_desktop_launcher() -> None:
+    """Crear lanzador en el escritorio para ejecutar Nova."""
+    if PLATFORM == "windows":
+        try:
+            header("Launcher de escritorio")
+            # Rutas del sistema Windows
+            import winreg
+            
+            desktop_path = None
+            try:
+                # Obtener ruta del Escritorio del usuario
+                with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r'Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders') as key:
+                    desktop_path = winreg.QueryValueEx(key, 'Desktop')[0]
+            except:
+                # Fallback: usar variables de entorno
+                desktop_path = os.path.expanduser("~\\Desktop")
+            
+            if not os.path.exists(desktop_path):
+                warn(f"No se encontró Escritorio en {desktop_path}")
+                return
+            
+            # Crear archivo .bat para lanzar Nova
+            nova_root = os.path.dirname(os.path.abspath(__file__))
+            bat_path = os.path.join(desktop_path, "Nova.bat")
+            
+            bat_content = f"""@echo off
+REM Launcher de Nova Personal Assistant
+cd /d "{nova_root}"
+python main.py
+pause
+"""
+            
+            with open(bat_path, 'w', encoding='utf-8') as f:
+                f.write(bat_content)
+            
+            ok(f"Launcher creado en Escritorio: Nova.bat")
+            
+            # Agregar al PATH para que se pueda ejecutar `nova` desde terminal
+            python_dir = os.path.dirname(sys.executable)
+            
+            # Crear script nova.py en Scripts de Python
+            scripts_dir = os.path.join(python_dir, "Scripts")
+            nova_script = os.path.join(scripts_dir, "nova.py")
+            nova_cmd = os.path.join(scripts_dir, "nova.cmd")
+            
+            nova_script_content = f"""#!/usr/bin/env python
+import sys
+import os
+
+# Agregar directorio del proyecto al path
+project_root = r"{nova_root}"
+sys.path.insert(0, os.path.join(project_root, 'src'))
+
+from nova.cli.repl import main
+
+if __name__ == '__main__':
+    main()
+"""
+            
+            # Contenido del archivo .cmd para que PowerShell lo ejecute
+            nova_cmd_content = f"""@echo off
+REM Wrapper para ejecutar nova desde terminal
+"{sys.executable}" "{nova_script}" %*
+"""
+            
+            try:
+                os.makedirs(scripts_dir, exist_ok=True)
+                with open(nova_script, 'w', encoding='utf-8') as f:
+                    f.write(nova_script_content)
+                
+                # Crear archivo .cmd para Windows CMD/PowerShell
+                with open(nova_cmd, 'w', encoding='utf-8') as f:
+                    f.write(nova_cmd_content)
+                
+                ok(f"Comando 'nova' disponible desde terminal")
+                info("  (reinicia PowerShell/CMD para que surta efecto)")
+            except Exception as e:
+                warn(f"No se pudo crear comando 'nova' en Scripts: {e}")
+                
+        except Exception as e:
+            warn(f"Error creando launcher de escritorio: {e}")
+    
+    elif PLATFORM == "macos":
+        try:
+            header("Launcher de escritorio")
+            desktop = os.path.expanduser("~/Desktop")
+            app_name = "Nova Personal Assistant"
+            
+            # Crear app alias en macOS
+            nova_root = os.path.dirname(os.path.abspath(__file__))
+            launcher_script = os.path.join(desktop, f"{app_name}.command")
+            
+            script_content = f"""#!/bin/bash
+cd "{nova_root}"
+python main.py
+"""
+            
+            with open(launcher_script, 'w', encoding='utf-8') as f:
+                f.write(script_content)
+            
+            os.chmod(launcher_script, 0o755)
+            ok(f"Launcher creado en Escritorio: {app_name}.command")
+            
+        except Exception as e:
+            warn(f"Error creando launcher de escritorio: {e}")
 
 
 def check_only() -> None:
@@ -224,7 +383,7 @@ def check_only() -> None:
 
     # Verificar imports críticos
     header("Módulos Python")
-    critical = ["openai", "speech_recognition", "pyaudio", "dotenv", "edge_tts"]
+    critical = ["openai", "speech_recognition", "dotenv", "edge_tts"]
     for mod in critical:
         try:
             __import__(mod)

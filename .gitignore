@@ -1,0 +1,94 @@
+# Secretos y configuración local
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Entornos virtuales
+venv/
+ENV/
+env/
+.venv
+env.bak/
+venv.bak/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Datos y caché locales
+*.db
+*.sqlite
+*.sqlite3
+__DOTNOVA_PATH__/
+*.log
+*.pid
+.cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Node (si se usa para algún frontend)
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Ollama (modelos locales)
+.ollama/
+models/
+ollama/
+
+# Memoria y almacenamiento local
+memories/
+cerebro/
+*.pkl
+*.npz
+
+# Archivos temporales
+*.tmp
+*.temp
+/tmp/
+temp/
+
+# Blender backups (si se usan)
+*.blend1
+*.blend2
+
+# Vision/imagen
+*.jpg
+*.png
+*.gif
+*.bmp
+
+# Audio grabado
+*.wav
+*.mp3
+*.m4a

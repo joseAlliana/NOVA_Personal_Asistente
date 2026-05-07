@@ -26,11 +26,39 @@ import re
 import subprocess
 import threading
 import time
-import audioop
-import pyaudio
 import atexit
 import asyncio
 import tempfile
+
+# ─── Importes opcionales: audioop, pyaudio y sounddevice ────────────────────
+# audioop fue removido en Python 3.13, usar fallback
+try:
+    import audioop
+    _AUDIOOP_AVAILABLE = True
+except ImportError:
+    _AUDIOOP_AVAILABLE = False
+    print("  [Audio] Advertencia: módulo audioop no disponible (Python 3.13+). Barge-in deshabilitado.")
+
+# sounddevice es la mejor opción para Windows (usa WASAPI nativo)
+try:
+    import sounddevice as sd
+    import numpy as np
+    _SOUNDDEVICE_AVAILABLE = True
+    _PYAUDIO_AVAILABLE = False  # Preferir sounddevice si está disponible
+    print("  [Audio] ✓ sounddevice disponible (grabación con WASAPI)")
+except ImportError:
+    _SOUNDDEVICE_AVAILABLE = False
+    # Intentar PyAudio como fallback
+    try:
+        import pyaudio
+        _PYAUDIO_AVAILABLE = True
+        print("  [Audio] ✓ PyAudio disponible (grabación)")
+    except ImportError:
+        _PYAUDIO_AVAILABLE = False
+        pyaudio = None
+        print("  [Audio] ⚠ CRÍTICO: Ni sounddevice ni PyAudio están disponibles.")
+        print("  [Audio]    - Windows: Ejecutar: pip install sounddevice numpy")
+        print("  [Audio]    - Esto es necesario para que Nova escuche cuando hablas.")
 
 try:
     import edge_tts as _edge_tts
@@ -285,43 +313,97 @@ def _monitor_barge_in(proc: subprocess.Popen) -> None:
     """
     Abre el micrófono y monitorea energía de audio.
     Si BARGE_IN_THRESHOLD == 0 → desactivado, espera que say termine solo.
+    Si no hay audio disponible → espera sin monitoreo.
+    Intenta usar sounddevice primero, luego PyAudio.
     """
     if BARGE_IN_THRESHOLD == 0:
         proc.wait()
         return
+    
+    # Si sounddevice está disponible, usarlo (mejor para Windows)
+    if _SOUNDDEVICE_AVAILABLE:
+        try:
+            import sounddevice as sd
+            import numpy as np
+            
+            # Espera inicial para que los altavoces no se detecten a sí mismos
+            warmup_time = 0.5  # segundos
+            sr = 16000
+            
+            # Configurar entrada de audio
+            print("  [barge-in] Monitoreando micrófono...")
+            
+            # Grabar datos de warmup (descartar)
+            warmup_samples = int(sr * warmup_time)
+            try:
+                _ = sd.rec(warmup_samples, samplerate=sr, channels=1, dtype='int16')
+                sd.wait()  # Esperar a que termine de grabar
+            except:
+                pass  # Si falla warmup, continuar de todos modos
+            
+            # Monitoreo activo
+            chunk_size = 1024
+            while proc.poll() is None:
+                try:
+                    audio_data = sd.rec(chunk_size, samplerate=sr, channels=1, dtype='int16')
+                    sd.wait()
+                    
+                    # Calcular RMS (energía del audio)
+                    rms = np.sqrt(np.mean(audio_data ** 2))
+                    
+                    if rms > BARGE_IN_THRESHOLD:
+                        proc.kill()
+                        print("\n  [barge-in] interrumpido por el usuario")
+                        return
+                except:
+                    pass  # Ignorar errores de audio
+        except Exception as e:
+            print(f"  [barge-in] Error con sounddevice: {e}. Esperando sin monitoreo.")
+            proc.wait()
+            return
+    
+    # Fallback a PyAudio si sounddevice no está disponible
+    elif _PYAUDIO_AVAILABLE and _AUDIOOP_AVAILABLE:
+        try:
+            pa     = pyaudio.PyAudio()
+            stream = None
+            try:
+                stream = pa.open(
+                    format=pyaudio.paInt16,
+                    channels=1,
+                    rate=16000,
+                    input=True,
+                    frames_per_buffer=1024,
+                )
+                # Espera inicial para que los altavoces no se detecten a sí mismos
+                warmup_chunks = 7   # ~0.45 s
+                for _ in range(warmup_chunks):
+                    if proc.poll() is not None:
+                        return
+                    stream.read(1024, exception_on_overflow=False)
 
-    pa     = pyaudio.PyAudio()
-    stream = None
-    try:
-        stream = pa.open(
-            format=pyaudio.paInt16,
-            channels=1,
-            rate=16000,
-            input=True,
-            frames_per_buffer=1024,
-        )
-        # Espera inicial para que los altavoces no se detecten a sí mismos
-        warmup_chunks = 7   # ~0.45 s
-        for _ in range(warmup_chunks):
-            if proc.poll() is not None:
-                return
-            stream.read(1024, exception_on_overflow=False)
-
-        # Monitoreo activo
-        while proc.poll() is None:
-            data   = stream.read(1024, exception_on_overflow=False)
-            energy = audioop.rms(data, 2)
-            if energy > BARGE_IN_THRESHOLD:
-                proc.kill()
-                print("\n  [barge-in] interrumpido por el usuario")
-                return
-    except Exception:
-        pass
-    finally:
-        if stream:
-            stream.stop_stream()
-            stream.close()
-        pa.terminate()
+                # Monitoreo activo
+                while proc.poll() is None:
+                    data   = stream.read(1024, exception_on_overflow=False)
+                    energy = audioop.rms(data, 2)
+                    if energy > BARGE_IN_THRESHOLD:
+                        proc.kill()
+                        print("\n  [barge-in] interrumpido por el usuario")
+                        return
+            except Exception:
+                pass
+            finally:
+                if stream:
+                    stream.stop_stream()
+                    stream.close()
+                pa.terminate()
+        except Exception:
+            proc.wait()
+            return
+    else:
+        # Sin audio disponible, esperar sin barge-in
+        proc.wait()
+        return
 
 
 # ─── Wake word ───────────────────────────────────────────────────────────────
